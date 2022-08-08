@@ -1,0 +1,496 @@
+---
+title: "vignette"
+output: pdf_document
+vignette: >
+  %\VignetteIndexEntry{vignette}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library("AirportAPI")
+library("fields")
+library("maps")
+library("sp")
+```
+
+```{r Create an alternative airport_data dataframe with numerical longitudes and latitudes}
+airport_data_num <- data.frame(ID=airport_data$ID,
+                               longitude=sapply(airport_data$longitude, ARPlon_to_deg),
+                               latitude=sapply(airport_data$latitude, ARPlat_to_deg))
+rownames(airport_data_num) <- seq(1, length(airport_data$ID))
+head(airport_data_num)
+```
+
+1.
+## Plot a map with information on airport codes and number of direct flies
+```{r prepare data for this plot}
+# get the number of direct flies for each city
+num_direct <- sort(sapply(X=direct_from, FUN = length), decreasing=T)
+top_ports <- num_direct[1:15] # display 15 airports with the most number of direct flights to avoid clutter
+# subset these major airports from the whole dataset
+top_ind <- which(airport_data_num$ID %in% names(top_ports))
+ports_to_display <- airport_data_num[top_ind, ]
+ports_to_display$num_direct <- top_ports
+```
+
+```{r plot the map with codes and number of direct flies for the top 15 busiest airports}
+US_mapdata <- map("usa")
+points(x=airport_data_num$longitude, y=airport_data_num$latitude,
+       type="p", col="black", pch=16, cex=0.5) # plot points for all airports
+text(x=ports_to_display$longitude, y=ports_to_display$latitude, 
+     labels=ports_to_display$ID, cex=0.4, adj=c(0,0), col="red") # show IDs for the busiest 15 airports
+text(x=ports_to_display$longitude, y=ports_to_display$latitude, 
+     labels=ports_to_display$num_direct, cex=0.4, adj=c(1,1), col="green") # show number of direct flies of the busiest 15 airports
+```
+
+2.
+```{r}
+# get the polygon defining the continental USA
+
+usa_poly <- map("usa")
+usa_poly$x <- c(NA,usa_poly$x,NA) 
+usa_poly$y <- c(NA,usa_poly$y,NA) 
+nai <- which( is.na( usa_poly$x ) )
+# define a grid of longitude and latitude points
+n1 <- 180
+n2 <- 90
+lo <- seq(usa_poly$range[1], usa_poly$range[2], length.out = n1) 
+la <- seq(usa_poly$range[3], usa_poly$range[4], length.out = n2) 
+lonlat_grid <- as.matrix( expand.grid( lo, la ) )
+# figure out which points are inside USA
+in_usa <- rep(FALSE, nrow(lonlat_grid)) 
+for(j in 1:(length(nai)-1)){
+  in_this <- sp::point.in.polygon( lonlat_grid[,1],
+  lonlat_grid[,2],
+  usa_poly$x[ (nai[j]+1):(nai[j+1]-1) ], usa_poly$y[ (nai[j]+1):(nai[j+1]-1) ]
+  )
+  in_usa <- in_usa | in_this 
+}
+# subset to the points in USA
+lonlat_usa <- as.matrix( lonlat_grid[ in_usa, ] )
+```
+
+```{r Find Closest Point to Ithaca}
+ithaca <- c(airport_data_num[airport_data_num$ID=="ITH", 2:3][[1]],
+                  airport_data_num[airport_data_num$ID=="ITH", 2:3][[2]])
+ithaca <- as.matrix(ithaca, nrow = 1, ncol = 2)
+points_reachable <- matrix(nrow=0, ncol=2)
+for(i in 1: nrow(lonlat_usa)) {
+  if(compute_gcd2(ithaca,lonlat_usa[i,]) < 10) {
+    points_reachable <- rbind(points_reachable, as.numeric(lonlat_usa[i,]))
+  }
+}
+ithaca <- c(-76.35124, 42.57051)
+```
+
+```{r}
+points_reachable_from <- function(lonlat, x, direct_from) {
+  points_reachable <- matrix(nrow=0, ncol=2)
+  #a
+  #2x distance
+  for(i in 1: nrow(lonlat_usa)) {
+    if(compute_gcd2(lonlat,lonlat_usa[i,]) < (2 * x)) {
+      points_reachable <- rbind(points_reachable, as.numeric(lonlat_usa[i,]))
+    }
+  }
+  #b
+  #get unique list of airport reachable by taking a flight
+  lst <- airports_nearby2(lonlat, 
+                x= x,
+                airport_data_num)
+  r <- c()
+  for (i in direct_from[lst]) {
+    r <- append(r,i)
+  }
+  uniquelst <- unique(r)
+  if(length(uniquelst) > 0) {
+      #check every location whether it is reachable from the list of airport within x
+    for(i in 1:length(uniquelst)) {
+      airport <- c(airport_data_num[airport_data_num$ID==uniquelst[i], 2:3][[1]],
+                      airport_data_num[airport_data_num$ID==uniquelst[i], 2:3][[2]])
+      if(length(airport) < 2) {
+        break
+      }
+      for(j in 1: nrow(lonlat_usa)) {
+        if(compute_gcd2(airport,lonlat_usa[j,]) < x) {
+          points_reachable <- rbind(points_reachable, as.numeric(lonlat_usa[j,]))
+        }
+      }
+    }
+  }
+  
+  #create a df for the unique points
+  points_reachable <- unique(points_reachable)
+  colnames(points_reachable) <- c("longitude", "latitude")
+  points_reachable <- as.data.frame(points_reachable)
+  return(points_reachable)
+}
+```
+```{r}
+#Coverage of points with x = 75
+points_reachable_from_ithaca_75 <- points_reachable_from(ithaca, 75, direct_from)
+US_mapdata <- map("usa")
+points(x=points_reachable_from_ithaca_75$longitude, y=points_reachable_from_ithaca_75$latitude,
+       type="p", col="black", pch=16, cex=0.5) 
+#Coverage of points from closest point to Ithaca
+nrow(points_reachable_from_ithaca_75)/nrow(lonlat_usa)
+```
+```{r}
+#Coverage of points with x = 100
+points_reachable_from_ithaca_100 <- points_reachable_from(ithaca, 100, direct_from)
+US_mapdata <- map("usa")
+points(x=points_reachable_from_ithaca_100$longitude, y=points_reachable_from_ithaca_100$latitude,
+       type="p", col="black", pch=16, cex=0.5)
+#Coverage of points from closest point to Ithaca
+nrow(points_reachable_from_ithaca_100)/nrow(lonlat_usa)
+```
+
+```{r}
+original_data_75 = readRDS(file = "../RDS/original_data_75.rds")
+#mean of percentage coverage of direct_from with 75mi as distance
+sum(original_data_75$prop)/nrow(original_data_75)
+colnames(original_data_75) <- c("longitude", "latitude","prop")
+quilt.plot(x=original_data_75$longitude, y=original_data_75$latitude,z=original_data_75$prop)
+```
+
+```{r}
+original_data_100 = readRDS(file = "../RDS/original_data_100.rds")
+#mean of percentage coverage of direct_from with 100mi as distance
+sum(original_data_100$prop)/nrow(original_data_100)
+colnames(original_data_100) <- c("longitude", "latitude","prop")
+quilt.plot(x=original_data_100$longitude, y=original_data_100$latitude,z=original_data_100$prop)
+```
+
+### 4a
+```{r}
+set.seed(123)
+# create original direct_from object
+direct_from_1 <- vector("list", length(airport_data$ID))
+air2019 <- read.csv("../CSV/airline_2019-07-01.csv", header=T)
+names(direct_from_1) <- airport_data$ID
+for (i in names(direct_from_1)){
+  direct_from_1[[i]] <- unique(c(direct_from_1[[i]], air2019[which(air2019$Origin==i),"Dest"]))
+  for (j in direct_from_1[[i]]){
+    if (!i %in% direct_from_1[[j]]){
+      direct_from_1[[j]] <- unique(c(direct_from_1[[j]], i))
+    }
+  }
+}
+#remove all the duplicate direct connections of airports that are within 100mi
+#count for the amount of connections that are removed
+count = 0
+for (i in names(direct_from_1)) {
+  airport_i <- c(airport_data_num[airport_data_num$ID==i, 2:3][[1]],
+                    airport_data_num[airport_data_num$ID==i, 2:3][[2]])
+  for (j in names(direct_from_1)) {
+    if(i == j) {
+      next
+    } else {
+      airport_j <- c(airport_data_num[airport_data_num$ID==j, 2:3][[1]],
+                    airport_data_num[airport_data_num$ID==j, 2:3][[2]])
+      distance <- compute_gcd2(airport_i,airport_j)
+      if(distance < 100) {
+        intersection <- intersect(direct_from_1[[i]],direct_from_1[[j]])
+        count = count + length(intersection)
+        if(length(intersection) > 0) {
+          for(k in 1:length(intersection)) {
+            rm = intersection[k]
+            direct_from_1[[i]] = direct_from_1[[i]][direct_from_1[[i]] != rm]
+            direct_from_1[[rm]] = direct_from_1[[rm]][direct_from_1[[rm]] != i]
+          }
+        }
+      }
+    }
+  }
+}
+#list of airports that are in area that had a low proportion covered from direct_from object analysis
+areas_not_covered <- c("PDX","BZN","BIS","FSD","CID","ELP","EKO","SLN","VEL","GTR")
+#add connections to random airports to the above list
+#The amount of connection that is added is equivalent to count from the previous part
+random300 <- sample(direct_from_1, 300)
+total_added <- count
+for(i in names(random300)) {
+  original_length <- length(direct_from_1[[i]])
+  new_lst <- sort(unique(append(direct_from_1[[i]],areas_not_covered)))
+  new_length <- length(new_lst)
+  num_added <- new_length - original_length
+  if(num_added > total_added) {
+    new_lst <- sort(unique(append(direct_from_1[[i]],areas_not_covered[1:total_added])))
+    direct_from_1[[i]] = new_lst
+    for(j in new_lst) {
+      direct_from_1[[j]] = sort(unique(append(direct_from_1[[j]],i)))
+    }
+    break
+  }
+  total_added <- total_added - num_added
+  direct_from_1[[i]] = new_lst
+  for(j in new_lst) {
+    direct_from_1[[j]] = sort(unique(append(direct_from_1[[j]],i)))
+  }
+}
+check_symmetric(direct_from_1)
+```
+```{r}
+#Coverage of points with x = 75 from ithaca
+points_reachable_from_ithaca_75_4a <- points_reachable_from(ithaca, 75, direct_from_1)
+US_mapdata <- map("usa")
+points(x=points_reachable_from_ithaca_75_4a$longitude, 
+       y=points_reachable_from_ithaca_75_4a$latitude,
+       type="p", col="black", pch=16, cex=0.5) 
+#Coverage of points from closest point to Ithaca
+nrow(points_reachable_from_ithaca_75_4a)/nrow(lonlat_usa)
+```
+
+```{r}
+#Coverage of points with x = 100 from ithaca
+points_reachable_from_ithaca_100_4a <- points_reachable_from(ithaca, 100, direct_from_1)
+US_mapdata <- map("usa")
+points(x=points_reachable_from_ithaca_100_4a$longitude, 
+       y=points_reachable_from_ithaca_100_4a$latitude,
+       type="p", col="black", pch=16, cex=0.5) 
+#Coverage of points from closest point to Ithaca
+nrow(points_reachable_from_ithaca_100_4a)/nrow(lonlat_usa)
+```
+
+```{r}
+direct_from_1_75 = readRDS(file = "../RDS/direct_from_1_75.rds")
+#mean of percentage coverage of direct_from with 75mi as distance
+sum(direct_from_1_75$prop)/nrow(direct_from_1_75)
+colnames(direct_from_1_75) <- c("longitude", "latitude","prop")
+quilt.plot(x=direct_from_1_75$longitude, y=direct_from_1_75$latitude,z=direct_from_1_75$prop)
+```
+
+```{r}
+direct_from_1_100 = readRDS(file = "../RDS/direct_from_1_100.rds")
+#mean of percentage coverage of direct_from with 100mi as distance
+sum(direct_from_1_100$prop)/nrow(direct_from_1_100)
+colnames(direct_from_1_100) <- c("longitude", "latitude","prop")
+quilt.plot(x=direct_from_1_100$longitude, y=direct_from_1_100$latitude,z=direct_from_1_100$prop)
+```
+
+### 4b
+```{r recreate the direct_from object}
+direct_from_2 <- vector("list", length(airport_data$ID))
+names(direct_from_2) <- airport_data$ID
+for (i in names(direct_from_2)){
+  direct_from_2[[i]] <- unique(c(direct_from_2[[i]], air2019[which(air2019$Origin==i),"Dest"]))
+  for (j in direct_from_2[[i]]){
+    if (!i %in% direct_from_2[[j]]){
+      direct_from_2[[j]] <- unique(c(direct_from_2[[j]], i))
+    }
+  }
+}
+n_iter_4b <- 10
+for (iter in 1:n_iter_4b){
+  
+  # randomly sample some airports to make changes
+  n_select <- 30
+  chosen_port <- sample(names(direct_from_2), n_select, replace=F)
+  for (i in chosen_port){
+    
+    # randomly add some random number of connections for each airport
+    could_add <- names(direct_from_2)[!names(direct_from_2) %in% direct_from_2[[i]]]
+    n_add <- sample(seq(2,20), 1) # add between 2-20 random connections
+    to_add <- sample(could_add, n_add, replace=F)
+    direct_from_2[[i]] <- c(direct_from_2[[i]], to_add)
+    for (k in to_add){
+      direct_from_2[[k]] <- c(direct_from_2[[k]], i)
+    } # maintain symmetry
+      
+    # randomly remove the same number of connections for each airport
+    to_rm <- sample(direct_from_2[[i]], n_add, replace=F)
+    direct_from_2[[i]] <- direct_from_2[[i]][!direct_from_2[[i]] %in% to_rm]
+    for (j in to_rm){
+      direct_from_2[[j]] <- direct_from_2[[j]][direct_from_2[[j]] != i]
+    } # maintain symmetry
+  }
+}
+check_symmetric(direct_from_2)
+```
+
+
+```{r}
+#Coverage of points with x = 75
+points_reachable_from_ithaca_75_4b <- points_reachable_from(ithaca, 75, direct_from_2)
+US_mapdata <- map("usa")
+points(x=points_reachable_from_ithaca_75_4b$longitude, 
+       y=points_reachable_from_ithaca_75_4b$latitude,
+       type="p", col="black", pch=16, cex=0.5) 
+#Coverage of points from closest point to Ithaca
+nrow(points_reachable_from_ithaca_75_4b)/nrow(lonlat_usa)
+```
+
+```{r}
+#Coverage of points with x = 100
+points_reachable_from_ithaca_100_4b <- points_reachable_from(ithaca, 100, direct_from_2)
+US_mapdata <- map("usa")
+points(x=points_reachable_from_ithaca_100_4b$longitude, 
+       y=points_reachable_from_ithaca_100_4b$latitude,
+       type="p", col="black", pch=16, cex=0.5) 
+#Coverage of points from closest point to Ithaca
+nrow(points_reachable_from_ithaca_100_4b)/nrow(lonlat_usa)
+```
+
+```{r}
+direct_from_2_75 = readRDS(file = "../RDS/direct_from_2_75.rds")
+#mean of percentage coverage of direct_from with 75mi as distance
+sum(direct_from_2_75$prop)/nrow(direct_from_2_75)
+colnames(direct_from_2_75) <- c("longitude", "latitude","prop")
+quilt.plot(x=direct_from_2_75$longitude, y=direct_from_2_75$latitude,z=direct_from_2_75$prop)
+```
+
+```{r}
+direct_from_2_100 = readRDS(file = "../RDS/direct_from_1_100.rds")
+#mean of percentage coverage of direct_from with 100mi as distance
+sum(direct_from_2_100$prop)/nrow(direct_from_2_100)
+colnames(direct_from_2_100) <- c("longitude", "latitude","prop")
+quilt.plot(x=direct_from_2_100$longitude, y=direct_from_2_100$latitude,z=direct_from_2_100$prop)
+```
+
+### 4c: add or subtract up to 2 connections from each airport, leaving the other connections unchanged, and keeping the total number of connections constant
+```{r}
+# whole matrix
+airport_data_mat <- cbind(airport_data$longitude, airport_data$latitude)
+rownames(airport_data_mat) <- airport_data$ID
+colnames(airport_data_mat) <- c("longitude", "latitude")
+full_port_dist <- distfun(airport_data_mat, airport_data_mat)
+
+# indices of potentially redundant airports (airports located within 100 miles from each other), calculated from the full distance matrix
+dup_ind <- which(full_port_dist<100 & full_port_dist!=0, arr.ind = T)
+
+direct_from_3 <- vector("list", length(airport_data$ID))
+names(direct_from_3) <- airport_data$ID
+for (i in names(direct_from_3)){
+  direct_from_3[[i]] <- unique(c(direct_from_3[[i]], air2019[which(air2019$Origin==i),"Dest"]))
+  for (j in direct_from_3[[i]]){
+    if (!i %in% direct_from_3[[j]]){
+      direct_from_3[[j]] <- unique(c(direct_from_3[[j]], i))
+    }
+  }
+}
+
+num_iter_4c <- 10
+# check for redundant direct flies in the direct_from_1 object
+# randomly remove connections to potentially redundant airports (but keep at least 1)
+for (iter in 1:num_iter_4c){
+  removed_4c <- 0
+  for (i in names(direct_from_3)){ # loop through all airports
+    intersection <- c()
+    for (j in 1:nrow(dup_ind)){ # loop through indices for potentially redundant connections
+      col <- dup_ind[j,2]
+      if (rownames(dup_ind)[j] %in% direct_from_3[[i]] & 
+          i == names(direct_from_3)[col]){
+        intersection <- c(intersection, rownames(dup_ind)[j])
+      }
+    }
+  
+    if (length(intersection)>=2){
+      if (length(intersection)>=3){ 
+        to_rm <- sample(intersection, 2, replace=F) # randomly sample 2 redundant airports to remove
+        direct_from_3[[i]] <- direct_from_3[[i]][!direct_from_3[[i]] %in% to_rm]
+        for (removed in to_rm){ # keep symmetry
+          direct_from_3[[removed]] <- direct_from_3[[removed]][direct_from_3[[removed]]!=i]
+        }
+        removed_4c <- removed_4c + 2
+      }else{
+        to_rm <- sample(intersection, 1, replace=F) # randomly sample 1 redundant airport to remove
+        direct_from_3[[i]] <- direct_from_3[[i]][!direct_from_3[[i]] %in% to_rm]
+        direct_from_3[[to_rm]] <- direct_from_3[[to_rm]][direct_from_3[[to_rm]]!=i]
+        removed_4c <- removed_4c + 1
+      }
+    }
+  }
+  
+  # randomly add back 11 connections for removed redundant airports
+  # if no redundant airports left, randomly select 20 airports and add or remove 1 or 2 connections
+  if (removed_4c > 0){
+    to_add <- sample(names(direct_from_3), removed_4c, replace=F) # 11 airports to add back
+    add_to <- sample(names(direct_from_3)[!names(direct_from_3) %in% to_add], 
+                 removed_4c, replace=F) # 11 airports to add back to
+    # add connections by 1-to-1 correspondance of the two vectors sampled above
+    counter_4c <- 0
+    for (i in to_add){
+      counter_4c <- counter_4c + 1
+      direct_from_3[[i]] <- c(direct_from_3[[i]], add_to[counter_4c])
+      direct_from_3[[add_to[counter_4c]]] <- 
+        c(direct_from_3[[add_to[counter_4c]]], i) # keep symmetry
+    }
+  }
+  else{
+    #cat("All redundant airports removed", "\n")
+    n <- 60
+    to_change <- sample(names(direct_from_3), n, replace=F) # n airports to add or remove connections
+    delta <- 0 # track the difference between added and removed connection; want it to be 0
+    counter2 <- 0
+    for (port in to_change){
+      counter2 <- counter2 + 1
+      if (counter2 %% 2 == 0){ # remove 1 if even index
+        delta <- delta - 1
+        change_to <- sample(names(direct_from_3)[!names(direct_from_3) %in% to_change], 1, replace=F)
+        direct_from_3[[port]] <- direct_from_3[[port]][!direct_from_3[[port]] %in% change_to]
+        for (port1 in change_to){
+          direct_from_3[[port1]] <- direct_from_3[[port1]][direct_from_3[[port1]]!=port] # keep symmetry
+        }
+        
+      }
+      else{ # add 1 if odd index
+        delta <- delta + 1
+        change_to <- sample(names(direct_from_3)[!names(direct_from_3) %in% to_change], 1, replace=F)
+        direct_from_3[[port]] <- c(direct_from_3[[port]], change_to)
+        for (port1 in change_to){
+          direct_from_3[[port1]] <- c(direct_from_3[[port1]], port)
+        }  
+      }
+    }
+  }
+}
+
+check_symmetric(direct_from_3)
+```
+
+```{r}
+#Coverage of points with x = 75
+points_reachable_from_ithaca_75_4c <- points_reachable_from(ithaca, 75, direct_from_3)
+US_mapdata <- map("usa")
+points(x=points_reachable_from_ithaca_75_4c$longitude, 
+       y=points_reachable_from_ithaca_75_4c$latitude,
+       type="p", col="black", pch=16, cex=0.5) 
+#Coverage of points from closest point to Ithaca
+nrow(points_reachable_from_ithaca_75_4c)/nrow(lonlat_usa)
+```
+
+```{r}
+#Coverage of points with x = 100
+points_reachable_from_ithaca_100_4c <- points_reachable_from(ithaca, 100, direct_from_3)
+US_mapdata <- map("usa")
+points(x=points_reachable_from_ithaca_100_4c$longitude, 
+       y=points_reachable_from_ithaca_100_4c$latitude,
+       type="p", col="black", pch=16, cex=0.5) 
+#Coverage of points from closest point to Ithaca
+nrow(points_reachable_from_ithaca_100_4c)/nrow(lonlat_usa)
+```
+
+```{r}
+direct_from_3_75 = readRDS(file = "../RDS/direct_from_3_75.rds")
+#mean of percentage coverage of direct_from with 75mi as distance
+sum(direct_from_3_75$prop)/nrow(direct_from_3_75)
+colnames(direct_from_3_75) <- c("longitude", "latitude","prop")
+quilt.plot(x=direct_from_3_75$longitude, y=direct_from_3_75$latitude,z=direct_from_3_75$prop)
+```
+
+```{r}
+direct_from_3_100 = readRDS(file = "../RDS/direct_from_3_100.rds")
+#mean of percentage coverage of direct_from with 100mi as distance
+sum(direct_from_3_100$prop)/nrow(direct_from_3_100)
+colnames(direct_from_3_100) <- c("longitude", "latitude","prop")
+quilt.plot(x=direct_from_3_100$longitude, y=direct_from_3_100$latitude,z=direct_from_3_100$prop)
+```
+
