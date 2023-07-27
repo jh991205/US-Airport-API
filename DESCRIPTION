@@ -4,7 +4,6 @@ Title: What the Package Does (Title Case)
 Version: 0.1.0
 Authors@R: c(
     person("Jiadi", "Huang", email = "jh2649@cornell.edu", role = c("aut", "cre")),
-    person("Ziqing", "Wang", email = "zw464@cornell.edu", role = c("aut")))
 Description: Functions for desigining airport network in the U.S
 License: GPL-2
 Encoding: UTF-8
